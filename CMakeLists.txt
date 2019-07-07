@@ -15,7 +15,7 @@ option(
 option(
 	USE_OPENSSL
 	"use openssl"
-	ON
+	OFF
 )
 option(
 	USE_GMP
@@ -40,7 +40,7 @@ option(
 option(
 	ONLY_LIB
 	"only lib"
-	OFF
+	ON
 )
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

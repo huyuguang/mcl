@@ -434,6 +434,11 @@ public:
 		op_.fp_mulUnit(z.v_, x.v_, y, op_.p);
 	}
 	static inline void inv(FpT& y, const FpT& x) { op_.fp_invOp(y.v_, x.v_, op_); }
+  FpT inverse() const {
+    FpT r_inv;
+    inv(r_inv, *this);
+    return r_inv;
+  }
 	static inline void divBy2(FpT& y, const FpT& x)
 	{
 #if 0
