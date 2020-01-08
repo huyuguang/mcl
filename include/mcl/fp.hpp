@@ -95,6 +95,7 @@ class FpT : public fp::Serializable<FpT<tag, maxBitSize>,
 	typedef fp::Serializable<FpT<tag, maxBitSize>, Operator> Serializer;
 public:
 	static const size_t maxSize = (maxBitSize + fp::UnitBitSize - 1) / fp::UnitBitSize;
+	static const size_t num_limbs = maxSize; // just for compatible with libff
 private:
 	template<class tag2, size_t maxBitSize2> friend class FpT;
 	Unit v_[maxSize];
@@ -459,6 +460,7 @@ public:
 	}
 	bool isZero() const { return op_.fp_isZero(v_); }
 	bool isOne() const { return fp::isEqualArray(v_, op_.oneRep, op_.N); }
+	void print() const { std::cout << *this << "\n"; }
 	static const inline FpT& one() { return *reinterpret_cast<const FpT*>(op_.oneRep); }
 	/*
 		half = (p + 1) / 2
