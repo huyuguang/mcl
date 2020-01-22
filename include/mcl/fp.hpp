@@ -24,6 +24,7 @@
 		#endif
 	#endif
 #endif
+#include <iostream>
 #include <cybozu/hash.hpp>
 #include <cybozu/stream.hpp>
 #include <mcl/op.hpp>
