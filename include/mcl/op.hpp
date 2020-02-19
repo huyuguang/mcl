@@ -23,7 +23,7 @@
 
 namespace mcl {
 
-static const int version = 0x094; /* 0xABC = A.BC */
+static const int version = 0x105; /* 0xABC = A.BC */
 
 /*
 	specifies available string format mode for X::setIoMode()
@@ -101,15 +101,24 @@ enum IoMode {
 	IoSerialize = 512, // use MBS for 1-bit y
 	IoFixedSizeByteSeq = IoSerialize, // obsolete
 	IoEcProj = 1024, // projective or jacobi coordinate
-	IoSerializeHexStr = 2048 // printable hex string
+	IoSerializeHexStr = 2048, // printable hex string
+	IoEcAffineSerialize = 4096 // serialize [x:y]
 };
 
 namespace fp {
+
+inline bool isIoSerializeMode(int ioMode)
+{
+	return ioMode & (IoArray | IoArrayRaw | IoSerialize | IoEcAffineSerialize | IoSerializeHexStr);
+}
 
 const size_t UnitBitSize = sizeof(Unit) * 8;
 
 const size_t maxUnitSize = (MCL_MAX_BIT_SIZE + UnitBitSize - 1) / UnitBitSize;
 #define MCL_MAX_UNIT_SIZE ((MCL_MAX_BIT_SIZE + MCL_UNIT_BIT_SIZE - 1) / MCL_UNIT_BIT_SIZE)
+
+const size_t maxMulVecN = 32; // inner loop of mulVec
+const size_t maxMulVecNGLV = 16; // inner loop of mulVec with GLV
 
 struct FpGenerator;
 struct Op;
@@ -363,13 +372,14 @@ private:
 
 inline const char* getIoSeparator(int ioMode)
 {
-	return (ioMode & (IoArray | IoArrayRaw | IoSerialize | IoSerializeHexStr)) ? "" : " ";
+	return (ioMode & (IoArray | IoArrayRaw | IoSerialize | IoSerializeHexStr | IoEcAffineSerialize)) ? "" : " ";
 }
 
-inline void dump(const char *s, size_t n)
+inline void dump(const void *buf, size_t n)
 {
+	const uint8_t *s = (const uint8_t *)buf;
 	for (size_t i = 0; i < n; i++) {
-		printf("%02x ", (uint8_t)s[i]);
+		printf("%02x ", s[i]);
 	}
 	printf("\n");
 }

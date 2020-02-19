@@ -26,6 +26,7 @@
 #include <mcl/window_method.hpp>
 #include <cybozu/endian.hpp>
 #include <cybozu/serializer.hpp>
+#include <mcl/ecparam.hpp>
 
 namespace mcl { namespace she {
 
@@ -366,10 +367,16 @@ private:
 	public:
 		const G& getS() const { return S_; }
 		const G& getT() const { return T_; }
+		G& getNonConstRefS() { return S_; }
+		G& getNonConstRefT() { return T_; }
 		void clear()
 		{
 			S_.clear();
 			T_.clear();
+		}
+		bool isValid() const
+		{
+			return S_.isValid() && T_.isValid();
 		}
 		static void add(CipherTextAT& z, const CipherTextAT& x, const CipherTextAT& y)
 		{
@@ -576,13 +583,7 @@ public:
 	*/
 	static void initG1only(const mcl::EcParam& para, size_t hashSize = 1024, size_t tryNum = local::defaultTryNum)
 	{
-		Fp::init(para.p);
-		Fr::init(para.n);
-		G1::init(para.a, para.b);
-		const Fp x0(para.gx);
-		const Fp y0(para.gy);
-		P_.set(x0, y0);
-
+		mcl::initCurve<G1, Fr>(para.curveType, &P_);
 		setRangeForG1DLP(hashSize);
 		useDecG1ViaGT_ = false;
 		useDecG2ViaGT_ = false;

@@ -74,6 +74,10 @@ bool isEnableJIT(); // 1st call is not threadsafe
 uint32_t sha256(void *out, uint32_t maxOutSize, const void *msg, uint32_t msgSize);
 uint32_t sha512(void *out, uint32_t maxOutSize, const void *msg, uint32_t msgSize);
 
+void hkdf_extract_addZeroByte(uint8_t hmac[32], const uint8_t *salt, size_t saltSize, const uint8_t *msg, size_t msgSize);
+void hkdf_extract(uint8_t hmac[32], const uint8_t *salt, size_t saltSize, const uint8_t *msg, size_t msgSize);
+void hkdf_expand(uint8_t out[64], const uint8_t prk[32], char info[6]);
+
 namespace local {
 
 inline void byteSwap(void *x, size_t n)
@@ -262,7 +266,7 @@ public:
 	{
 		bool isMinus = false;
 		*pb = false;
-		if (ioMode & (IoArray | IoArrayRaw | IoSerialize | IoSerializeHexStr)) {
+		if (fp::isIoSerializeMode(ioMode)) {
 			const size_t n = getByteSize();
 			v_[op_.N - 1] = 0;
 			size_t readSize;
@@ -298,7 +302,7 @@ public:
 	void save(bool *pb, OutputStream& os, int ioMode) const
 	{
 		const size_t n = getByteSize();
-		if (ioMode & (IoArray | IoArrayRaw | IoSerialize | IoSerializeHexStr)) {
+		if (fp::isIoSerializeMode(ioMode)) {
 			if (ioMode & IoArrayRaw) {
 				cybozu::write(pb, os, v_, n);
 			} else {
@@ -333,6 +337,7 @@ public:
 	}
 	/*
 		mode = Mod : set x mod p if sizeof(S) * n <= 64 else error
+		set array x as little endian
 	*/
 	template<class S>
 	void setArray(bool *pb, const S *x, size_t n, mcl::fp::MaskMode mode = fp::NoMask)
@@ -348,6 +353,15 @@ public:
 	{
 		fp::copyAndMask(v_, x, sizeof(S) * n, op_, fp::MaskAndMod);
 		toMont();
+	}
+	/*
+		set (array mod p)
+		error if sizeof(S) * n > 64
+	*/
+	template<class S>
+	void setArrayMod(bool *pb, const S *x, size_t n)
+	{
+		setArray(pb, x, n, fp::Mod);
 	}
 
 	/*
@@ -368,6 +382,29 @@ public:
 		} else {
 			b.p = &v_[0];
 		}
+	}
+	/*
+		write a value with little endian
+		write buf[0] = 0 and return 1 if the value is 0
+		return written size if success else 0
+	*/
+	size_t getLittleEndian(void *buf, size_t maxBufSize) const
+	{
+		fp::Block b;
+		getBlock(b);
+		const uint8_t *src = (const uint8_t *)b.p;
+		uint8_t *dst = (uint8_t *)buf;
+		size_t n = b.n * sizeof(b.p[0]);
+		while (n > 0) {
+			if (src[n - 1]) break;
+			n--;
+		}
+		if (n == 0) n = 1; // zero
+		if (maxBufSize < n) return 0;
+		for (size_t i = 0; i < n; i++) {
+			dst[i] = src[i];
+		}
+		return n;
 	}
 	void setByCSPRNG(bool *pb, fp::RandGen rg = fp::RandGen())
 	{
@@ -535,8 +572,11 @@ public:
 	}
 	static void setETHserialization(bool ETHserialization)
 	{
-		if (getBitSize() != 381) return;
 		isETHserialization_ = ETHserialization;
+	}
+	static bool getETHserialization()
+	{
+		return isETHserialization_;
 	}
 	static inline bool isETHserialization() { return isETHserialization_; }
 	static inline int getIoMode() { return ioMode_; }
@@ -674,6 +714,7 @@ template<class tag, size_t maxBitSize> void (*FpT<tag, maxBitSize>::sqr)(FpT& y,
 
 } // mcl
 
+#ifndef CYBOZU_DONT_USE_EXCEPTION
 #ifdef CYBOZU_USE_BOOST
 namespace mcl {
 
@@ -696,6 +737,7 @@ struct hash<mcl::FpT<tag, maxBitSize> > {
 };
 
 CYBOZU_NAMESPACE_TR1_END } // std::tr1
+#endif
 #endif
 
 #ifdef _MSC_VER

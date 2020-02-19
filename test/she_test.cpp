@@ -586,7 +586,7 @@ void decBench(const char *msg, int C, const SecretKey& sec, const PublicKey& pub
 	}
 }
 
-#ifndef PAPER
+#if !defined(PAPER) && defined(NDEBUG)
 CYBOZU_TEST_AUTO(hashBench)
 {
 	SecretKey& sec = g_sec;
@@ -716,8 +716,9 @@ CYBOZU_TEST_AUTO(hashBench)
 CYBOZU_TEST_AUTO(liftedElGamal)
 {
 	const size_t hashSize = 1024;
-	initG1only(mcl::ecparam::secp192k1, hashSize);
-	const size_t byteSize = 192 / 8;
+	const mcl::EcParam& param = mcl::ecparam::secp256k1;
+	initG1only(param, hashSize);
+	const size_t byteSize = (param.bitSize + 7) / 8;
 	SecretKey sec;
 	sec.setByCSPRNG();
 	PublicKey pub;

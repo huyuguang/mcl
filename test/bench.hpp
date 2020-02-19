@@ -82,15 +82,15 @@ void testBench(const G1& P, const G2& Q)
 	G2 QQ;
 	std::string s;
 	s = P.getStr();
+	verifyOrderG1(true);
 	CYBOZU_BENCH_C("G1::setStr chk", C, PP.setStr, s);
 	verifyOrderG1(false);
 	CYBOZU_BENCH_C("G1::setStr    ", C, PP.setStr, s);
-	verifyOrderG1(true);
 	s = Q.getStr();
+	verifyOrderG2(true);
 	CYBOZU_BENCH_C("G2::setStr chk", C, QQ.setStr, s);
 	verifyOrderG2(false);
 	CYBOZU_BENCH_C("G2::setStr    ", C, QQ.setStr, s);
-	verifyOrderG2(true);
 	CYBOZU_BENCH_C("hashAndMapToG1", C, hashAndMapToG1, PP, "abc", 3);
 	CYBOZU_BENCH_C("hashAndMapToG2", C, hashAndMapToG2, QQ, "abc", 3);
 #endif
@@ -141,6 +141,21 @@ void testBench(const G1& P, const G2& Q)
 	CYBOZU_BENCH_C("precomputeG2  ", C, precomputeG2, Qcoeff, Q);
 	precomputeG2(Qcoeff, Q);
 	CYBOZU_BENCH_C("precomputedML ", C, precomputedMillerLoop, e2, P, Qcoeff);
+	const size_t n = 7;
+	G1 Pvec[n];
+	G2 Qvec[n];
+	for (size_t i = 0; i < n; i++) {
+		char d = (char)(i + 1);
+		hashAndMapToG1(Pvec[i], &d, 1);
+		hashAndMapToG2(Qvec[i], &d, 1);
+	}
+	e2 = 1;
+	for (size_t i = 0; i < n; i++) {
+		millerLoop(e1, Pvec[i], Qvec[i]);
+		e2 *= e1;
+	}
+	CYBOZU_BENCH_C("millerLoopVec ", 3000, millerLoopVec, e1, Pvec, Qvec, n);
+	CYBOZU_TEST_EQUAL(e1, e2);
 }
 
 inline void SquareRootPrecomputeTest(const mpz_class& p)

@@ -7,9 +7,8 @@
 	http://opensource.org/licenses/BSD-3-Clause
 */
 #include <stdlib.h>
-#include <cybozu/exception.hpp>
-#include <mcl/op.hpp>
-#include <mcl/util.hpp>
+#include <mcl/fp.hpp>
+#include <mcl/ecparam.hpp>
 
 //#define MCL_EC_USE_AFFINE
 
@@ -50,6 +49,22 @@ bool get_a_flag(const mcl::Fp2T<Fp>& x)
 
 } // mcl::ec
 
+namespace local {
+
+template<class Ec, class Vec>
+void addTbl(Ec& Q, const Ec *tbl, const Vec& naf, size_t i)
+{
+	if (i >= naf.size()) return;
+	int n = naf[i];
+	if (n > 0) {
+		Q += tbl[(n - 1) >> 1];
+	} else if (n < 0) {
+		Q -= tbl[(-n - 1) >> 1];
+	}
+}
+
+} // mcl::local
+
 /*
 	elliptic curve
 	y^2 = x^3 + ax + b (affine)
@@ -83,6 +98,7 @@ public:
 	static bool verifyOrder_;
 	static mpz_class order_;
 	static void (*mulArrayGLV)(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime);
+	static size_t (*mulVecNGLV)(EcT& z, const EcT *xVec, const mpz_class *yVec, size_t yn);
 	/* default constructor is undefined value */
 	EcT() {}
 	EcT(const Fp& _x, const Fp& _y)
@@ -196,6 +212,7 @@ public:
 		verifyOrder_ = false;
 		order_ = 0;
 		mulArrayGLV = 0;
+		mulVecNGLV = 0;
 #ifdef MCL_EC_USE_AFFINE
 		cybozu::disable_warning_unused_variable(mode);
 #else
@@ -217,9 +234,10 @@ public:
 			// don't clear order_ because it is used for isValidOrder()
 		}
 	}
-	static void setMulArrayGLV(void f(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime))
+	static void setMulArrayGLV(void f(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime), size_t g(EcT& z, const EcT *xVec, const mpz_class *yVec, size_t yn) = 0)
 	{
 		mulArrayGLV = f;
+		mulVecNGLV = g;
 	}
 	static inline void init(bool *pb, const char *astr, const char *bstr, int mode = ec::Jacobi)
 	{
@@ -489,12 +507,18 @@ public:
 			return;
 		}
 		if (isPzOne) {
-			R.z = H;
+			if (isQzOne) {
+				R.z = H;
+			} else {
+				Fp::mul(R.z, H, Q.z);
+			}
 		} else {
-			Fp::mul(R.z, P.z, H);
-		}
-		if (!isQzOne) {
-			R.z *= Q.z;
+			if (isQzOne) {
+				Fp::mul(R.z, P.z, H);
+			} else {
+				Fp::mul(R.z, P.z, Q.z);
+				R.z *= H;
+			}
 		}
 		Fp::sqr(H3, H); // H^2
 		Fp::sqr(R.y, r); // r^2
@@ -728,6 +752,23 @@ public:
 		}
 		EcT P(*this);
 		P.normalize();
+		if (ioMode & IoEcAffineSerialize) {
+			if (b_ == 0) { // assume Zero if x = y = 0
+				*pb = false;
+				return;
+			}
+			if (isZero()) {
+				// all zero
+				P.z.save(pb, os, IoSerialize);
+				if (!*pb) return;
+				P.z.save(pb, os, IoSerialize);
+				return;
+			}
+			P.x.save(pb, os, IoSerialize);
+			if (!*pb) return;
+			P.y.save(pb, os, IoSerialize);
+			return;
+		}
 		if (ioMode & (IoSerialize | IoSerializeHexStr)) {
 			const size_t n = Fp::getByteSize();
 			const size_t adj = isMSBserialize() ? 0 : 1;
@@ -811,6 +852,21 @@ public:
 #else
 		z = 1;
 #endif
+		if (ioMode & IoEcAffineSerialize) {
+			if (b_ == 0) { // assume Zero if x = y = 0
+				*pb = false;
+				return;
+			}
+			x.load(pb, is, IoSerialize);
+			if (!*pb) return;
+			y.load(pb, is, IoSerialize);
+			if (!*pb) return;
+			if (x.isZero() && y.isZero()) {
+				z.clear();
+				return;
+			}
+			goto verifyValidness;
+		}
 		if (ioMode & (IoSerialize | IoSerializeHexStr)) {
 			const size_t n = Fp::getByteSize();
 			const size_t adj = isMSBserialize() ? 0 : 1;
@@ -856,7 +912,7 @@ public:
 				if (ec::local::get_a_flag(y) ^ a) {
 					Fp::neg(y, y);
 				}
-				return;
+				goto verifyOrder;
 			}
 			if (fp::isZeroArray(buf, n1)) {
 				clear();
@@ -893,10 +949,7 @@ public:
 			x.load(pb, is, ioMode); if (!*pb) return;
 			if (c == '1') {
 				y.load(pb, is, ioMode); if (!*pb) return;
-				if (!isValid(x, y)) {
-					*pb = false;
-					return;
-				}
+				goto verifyValidness;
 			} else if (c == '2' || c == '3') {
 				bool isYodd = c == '3';
 				*pb = getYfromX(y, x, isYodd);
@@ -911,11 +964,19 @@ public:
 				return;
 			}
 		}
+	verifyOrder:
 		if (verifyOrder_ && !isValidOrder()) {
 			*pb = false;
 		} else {
 			*pb = true;
 		}
+		return;
+	verifyValidness:
+		if (!isValid(x, y)) {
+			*pb = false;
+			return;
+		}
+		goto verifyOrder;
 	}
 	// deplicated
 	static void setCompressedExpression(bool compressedExpression = true)
@@ -977,38 +1038,254 @@ public:
 	bool operator>=(const EcT& rhs) const { return !operator<(rhs); }
 	bool operator>(const EcT& rhs) const { return rhs < *this; }
 	bool operator<=(const EcT& rhs) const { return !operator>(rhs); }
-	static inline void mulArray(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime = false)
+	static inline void mulArray(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime = false, bool useGLV = true)
 	{
-		if (!constTime && x.isZero()) {
-			z.clear();
-			return;
+		if (!constTime) {
+			if (yn == 0) {
+				z.clear();
+				return;
+			}
+			yn = fp::getNonZeroArraySize(y, yn);
+			if (yn <= 1 && mulSmallInt(z, x, *y, isNegative)) return;
 		}
-		if (mulArrayGLV && (constTime || yn > 1)) {
+		if (useGLV && mulArrayGLV && (yn * sizeof(fp::Unit) > 8)) {
 			mulArrayGLV(z, x, y, yn, isNegative, constTime);
 			return;
 		}
 		mulArrayBase(z, x, y, yn, isNegative, constTime);
 	}
-	static inline void mulArrayBase(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime)
+	static inline bool mulSmallInt(EcT& z, const EcT& x, fp::Unit y, bool isNegative)
 	{
-		EcT tmp;
-		const EcT *px = &x;
-		if (&z == &x) {
-			tmp = x;
-			px = &tmp;
+		switch (y) {
+		case 0: z.clear(); return true;
+		case 1: z = x; break;
+		case 2: dbl(z, x); break;
+		case 3: {
+			EcT t;
+			dbl(t, x);
+			add(z, t, x);
+			break;
 		}
-		z.clear();
-		fp::powGeneric(z, *px, y, yn, EcT::add, EcT::dbl, EcT::normalize, constTime ? Fp::BaseFp::getBitSize() : 0);
+		case 4: {
+			dbl(z, x);
+			dbl(z, z);
+			break;
+		}
+		case 5: {
+			EcT t;
+			dbl(t, x);
+			dbl(t, t);
+			add(z, t, x);
+			break;
+		}
+		case 6: {
+			EcT t;
+			dbl(t, x);
+			add(z, t, x);
+			dbl(z, z);
+			break;
+		}
+		case 7: {
+			EcT t;
+			dbl(t, x);
+			dbl(t, t);
+			dbl(t, t);
+			sub(z, t, x);
+			break;
+		}
+		case 8: {
+			dbl(z, x);
+			dbl(z, z);
+			dbl(z, z);
+			break;
+		}
+		case 9: {
+			EcT t;
+			dbl(t, x);
+			dbl(t, t);
+			dbl(t, t);
+			add(z, t, x);
+			break;
+		}
+		case 10: {
+			EcT t;
+			dbl(t, x);
+			dbl(t, t);
+			add(z, t, x);
+			dbl(z, z);
+			break;
+		}
+		case 11: {
+			EcT t1, t2;
+			dbl(t1, x); // 2x
+			dbl(t2, t1);
+			dbl(t2, t2); // 8x
+			add(t2, t2, t1);
+			add(z, t2, x);
+			break;
+		}
+		case 12: {
+			EcT t1, t2;
+			dbl(t1, x);
+			dbl(t1, t1); // 4x
+			dbl(t2, t1); // 8x
+			add(z, t1, t2);
+			break;
+		}
+		case 13: {
+			EcT t1, t2;
+			dbl(t1, x);
+			dbl(t1, t1); // 4x
+			dbl(t2, t1); // 8x
+			add(t1, t1, t2); // 12x
+			add(z, t1, x);
+			break;
+		}
+		case 14: {
+			EcT t;
+			// (8 - 1) * 2
+			dbl(t, x);
+			dbl(t, t);
+			dbl(t, t);
+			sub(t, t, x);
+			dbl(z, t);
+			break;
+		}
+		case 15: {
+			EcT t;
+			dbl(t, x);
+			dbl(t, t);
+			dbl(t, t);
+			dbl(t, t);
+			sub(z, t, x);
+			break;
+		}
+		case 16: {
+			dbl(z, x);
+			dbl(z, z);
+			dbl(z, z);
+			dbl(z, z);
+			break;
+		}
+		default:
+			return false;
+		}
 		if (isNegative) {
 			neg(z, z);
+		}
+		return true;
+	}
+	static inline void mulArrayBase(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime)
+	{
+		(void)constTime;
+		mpz_class v;
+		bool b;
+		gmp::setArray(&b, v, y, yn);
+		assert(b); (void)b;
+		if (isNegative) v = -v;
+		const int maxW = 5;
+		const int maxTblSize = 1 << (maxW - 2);
+		/*
+			L = log2(y), w = (L <= 32) ? 3 : (L <= 128) ? 4 : 5;
+		*/
+		const int w = (yn == 1 && *y <= (1ull << 32)) ? 3 : (yn * sizeof(fp::Unit) > 16) ? 5 : 4;
+		const size_t tblSize = size_t(1) << (w - 2);
+		typedef mcl::FixedArray<int8_t, sizeof(EcT::Fp) * 8 + 1> NafArray;
+		NafArray naf;
+		EcT tbl[maxTblSize];
+		gmp::getNAFwidth(&b, naf, v, w);
+		assert(b); (void)b;
+		EcT P2;
+		dbl(P2, x);
+		tbl[0] = x;
+		for (size_t i = 1; i < tblSize; i++) {
+			add(tbl[i], tbl[i - 1], P2);
+		}
+		z.clear();
+		for (size_t i = 0; i < naf.size(); i++) {
+			EcT::dbl(z, z);
+			local::addTbl(z, tbl, naf, naf.size() - 1 - i);
 		}
 	}
 	/*
 		generic mul
+		GLV can't be applied in Fp12 - GT
 	*/
 	static inline void mulGeneric(EcT& z, const EcT& x, const mpz_class& y, bool constTime = false)
 	{
-		mulArrayBase(z, x, gmp::getUnit(y), gmp::getUnitSize(y), y < 0, constTime);
+		mulArray(z, x, gmp::getUnit(y), gmp::getUnitSize(y), y < 0, constTime, false);
+	}
+	/*
+		z = sum_{i=0}^{n-1} xVec[i] * yVec[i]
+		return min(N, n)
+		@note &z != xVec[i]
+	*/
+private:
+	template<class tag, size_t maxBitSize, template<class _tag, size_t _maxBitSize>class FpT>
+	static inline size_t mulVecN(EcT& z, const EcT *xVec, const FpT<tag, maxBitSize> *yVec, size_t n)
+	{
+		const size_t N = mcl::fp::maxMulVecN;
+		if (n > N) n = N;
+		const int w = 5;
+		const size_t tblSize = 1 << (w - 2);
+		typedef mcl::FixedArray<int8_t, sizeof(EcT::Fp) * 8 + 1> NafArray;
+		NafArray naf[N];
+		EcT tbl[N][tblSize];
+		size_t maxBit = 0;
+		mpz_class y;
+		for (size_t i = 0; i < n; i++) {
+			bool b;
+			yVec[i].getMpz(&b, y);
+			assert(b); (void)b;
+			gmp::getNAFwidth(&b, naf[i], y, w);
+			assert(b); (void)b;
+			if (naf[i].size() > maxBit) maxBit = naf[i].size();
+			EcT P2;
+			EcT::dbl(P2, xVec[i]);
+			tbl[i][0] = xVec[i];
+			for (size_t j = 1; j < tblSize; j++) {
+				EcT::add(tbl[i][j], tbl[i][j - 1], P2);
+			}
+		}
+		z.clear();
+		for (size_t i = 0; i < maxBit; i++) {
+			EcT::dbl(z, z);
+			for (size_t j = 0; j < n; j++) {
+				local::addTbl(z, tbl[j], naf[j], maxBit - 1 - i);
+			}
+		}
+		return n;
+	}
+
+public:
+	template<class tag, size_t maxBitSize, template<class _tag, size_t _maxBitSize>class FpT>
+	static inline void mulVec(EcT& z, const EcT *xVec, const FpT<tag, maxBitSize> *yVec, size_t n)
+	{
+		/*
+			mulVecNGLV is a little slow for large n
+		*/
+		if (mulVecNGLV && n < mcl::fp::maxMulVecNGLV) {
+			mpz_class myVec[mcl::fp::maxMulVecNGLV];
+			for (size_t i = 0; i < n; i++) {
+				bool b;
+				yVec[i].getMpz(&b, myVec[i]);
+				assert(b); (void)b;
+			}
+			size_t done = mulVecNGLV(z, xVec, myVec, n);
+			assert(done == n); (void)done;
+			return;
+		}
+		EcT r;
+		r.clear();
+		while (n > 0) {
+			EcT t;
+			size_t done = mulVecN(t, xVec, yVec, n);
+			r += t;
+			xVec += done;
+			yVec += done;
+			n -= done;
+		}
+		z = r;
 	}
 #ifndef CYBOZU_DONT_USE_EXCEPTION
 	static inline void init(const std::string& astr, const std::string& bstr, int mode = ec::Jacobi)
@@ -1064,24 +1341,194 @@ template<class Fp> int EcT<Fp>::ioMode_;
 template<class Fp> bool EcT<Fp>::verifyOrder_;
 template<class Fp> mpz_class EcT<Fp>::order_;
 template<class Fp> void (*EcT<Fp>::mulArrayGLV)(EcT& z, const EcT& x, const fp::Unit *y, size_t yn, bool isNegative, bool constTime);
+template<class Fp> size_t (*EcT<Fp>::mulVecNGLV)(EcT& z, const EcT *xVec, const mpz_class *yVec, size_t yn);
 #ifndef MCL_EC_USE_AFFINE
 template<class Fp> int EcT<Fp>::mode_;
 #endif
 
-struct EcParam {
-	const char *name;
-	const char *p;
-	const char *a;
-	const char *b;
-	const char *gx;
-	const char *gy;
-	const char *n;
-	size_t bitSize; // bit length of p
-	int curveType;
+// r = the order of Ec
+template<class Ec, class _Fr>
+struct GLV1T {
+	typedef typename Ec::Fp Fp;
+	typedef _Fr Fr;
+	static Fp rw; // rw = 1 / w = (-1 - sqrt(-3)) / 2
+	static size_t rBitSize;
+	static mpz_class v0, v1;
+	static mpz_class B[2][2];
+public:
+#ifndef CYBOZU_DONT_USE_STRING
+	static void dump(const mpz_class& x)
+	{
+		printf("\"%s\",\n", mcl::gmp::getStr(x, 16).c_str());
+	}
+	static void dump()
+	{
+		printf("\"%s\",\n", rw.getStr(16).c_str());
+		printf("%d,\n", (int)rBitSize);
+		dump(v0);
+		dump(v1);
+		dump(B[0][0]); dump(B[0][1]); dump(B[1][0]); dump(B[1][1]);
+	}
+#endif
+	/*
+		L (x, y) = (rw x, y)
+	*/
+	static void mulLambda(Ec& Q, const Ec& P)
+	{
+		Fp::mul(Q.x, P.x, rw);
+		Q.y = P.y;
+		Q.z = P.z;
+	}
+	/*
+		x = a + b * lambda mod r
+	*/
+	static void split(mpz_class& a, mpz_class& b, const mpz_class& x)
+	{
+		mpz_class t;
+		t = (x * v0) >> rBitSize;
+		b = (x * v1) >> rBitSize;
+		a = x - (t * B[0][0] + b * B[1][0]);
+		b = - (t * B[0][1] + b * B[1][1]);
+	}
+	static void mul(Ec& Q, const Ec& P, const mpz_class& x, bool /*constTime*/ = false)
+	{
+		mulVecNGLV(Q, &P, &x, 1);
+	}
+	static inline size_t mulVecNGLV(Ec& z, const Ec *xVec, const mpz_class *yVec, size_t n)
+	{
+		const size_t N = mcl::fp::maxMulVecNGLV;
+		if (n > N) n = N;
+		const int w = 5;
+		const mpz_class& r = Fr::getOp().mp;
+		const size_t tblSize = 1 << (w - 2);
+		typedef mcl::FixedArray<int8_t, sizeof(Fr) * 8 / 2 + 2> NafArray;
+		NafArray naf[N][2];
+		Ec tbl[N][2][tblSize];
+		bool b;
+		mpz_class u[2], y;
+		size_t maxBit = 0;
+		for (size_t i = 0; i < n; i++) {
+			y = yVec[i];
+			y %= r;
+			if (y < 0) {
+				y += r;
+			}
+			split(u[0], u[1], y);
+
+			for (int j = 0; j < 2; j++) {
+				gmp::getNAFwidth(&b, naf[i][j], u[j], w);
+				assert(b); (void)b;
+				if (naf[i][j].size() > maxBit) maxBit = naf[i][j].size();
+			}
+
+			Ec P2;
+			Ec::dbl(P2, xVec[i]);
+			tbl[i][0][0] = xVec[i];
+			mulLambda(tbl[i][1][0], tbl[i][0][0]);
+			for (size_t j = 1; j < tblSize; j++) {
+				Ec::add(tbl[i][0][j], tbl[i][0][j - 1], P2);
+				mulLambda(tbl[i][1][j], tbl[i][0][j]);
+			}
+		}
+		z.clear();
+		for (size_t i = 0; i < maxBit; i++) {
+			Ec::dbl(z, z);
+			for (size_t j = 0; j < n; j++) {
+				local::addTbl(z, tbl[j][0], naf[j][0], maxBit - 1 - i);
+				local::addTbl(z, tbl[j][1], naf[j][1], maxBit - 1 - i);
+			}
+		}
+		return n;
+	}
+	static void mulArrayGLV(Ec& z, const Ec& x, const mcl::fp::Unit *y, size_t yn, bool isNegative, bool constTime)
+	{
+		mpz_class s;
+		bool b;
+		mcl::gmp::setArray(&b, s, y, yn);
+		assert(b);
+		if (isNegative) s = -s;
+		mul(z, x, s, constTime);
+	}
+	/*
+		initForBN() is defined in bn.hpp
+	*/
+	static void initForSecp256k1()
+	{
+		bool b = Fp::squareRoot(rw, -3);
+		assert(b);
+		(void)b;
+		rw = -(rw + 1) / 2;
+		rBitSize = Fr::getOp().bitSize;
+		rBitSize = (rBitSize + fp::UnitBitSize - 1) & ~(fp::UnitBitSize - 1);
+		gmp::setStr(&b, B[0][0], "0x3086d221a7d46bcde86c90e49284eb15");
+		assert(b); (void)b;
+		gmp::setStr(&b, B[0][1], "-0xe4437ed6010e88286f547fa90abfe4c3");
+		assert(b); (void)b;
+		gmp::setStr(&b, B[1][0], "0x114ca50f7a8e2f3f657c1108d9d44cfd8");
+		assert(b); (void)b;
+		B[1][1] = B[0][0];
+		const mpz_class& r = Fr::getOp().mp;
+		v0 = ((B[1][1]) << rBitSize) / r;
+		v1 = ((-B[0][1]) << rBitSize) / r;
+	}
 };
+
+// rw = 1 / w = (-1 - sqrt(-3)) / 2
+template<class Ec, class Fr> typename Ec::Fp GLV1T<Ec, Fr>::rw;
+template<class Ec, class Fr> size_t GLV1T<Ec, Fr>::rBitSize;
+template<class Ec, class Fr> mpz_class GLV1T<Ec, Fr>::v0;
+template<class Ec, class Fr> mpz_class GLV1T<Ec, Fr>::v1;
+template<class Ec, class Fr> mpz_class GLV1T<Ec, Fr>::B[2][2];
+
+/*
+	Ec : elliptic curve
+	Zn : cyclic group of the order |Ec|
+	set P the generator of Ec if P != 0
+*/
+template<class Ec, class Zn>
+void initCurve(bool *pb, int curveType, Ec *P = 0, mcl::fp::Mode mode = fp::FP_AUTO, mcl::ec::Mode ecMode = ec::Jacobi)
+{
+	typedef typename Ec::Fp Fp;
+	*pb = false;
+	const EcParam *ecParam = getEcParam(curveType);
+	if (ecParam == 0) return;
+
+	Zn::init(pb, ecParam->n, mode);
+	if (!*pb) return;
+	Fp::init(pb, ecParam->p, mode);
+	if (!*pb) return;
+	Ec::init(pb, ecParam->a, ecParam->b, ecMode);
+	if (!*pb) return;
+	if (P) {
+		Fp x, y;
+		x.setStr(pb, ecParam->gx);
+		if (!*pb) return;
+		y.setStr(pb, ecParam->gy);
+		if (!*pb) return;
+		P->set(pb, x, y);
+		if (!*pb) return;
+	}
+	if (curveType == MCL_SECP256K1) {
+		GLV1T<Ec, Zn>::initForSecp256k1();
+		Ec::setMulArrayGLV(GLV1T<Ec, Zn>::mulArrayGLV, GLV1T<Ec, Zn>::mulVecNGLV);
+	} else {
+		Ec::setMulArrayGLV(0);
+	}
+}
+
+#ifndef CYBOZU_DONT_USE_EXCEPTION
+template<class Ec, class Zn>
+void initCurve(int curveType, Ec *P = 0, mcl::fp::Mode mode = fp::FP_AUTO, mcl::ec::Mode ecMode = ec::Jacobi)
+{
+	bool b;
+	initCurve<Ec, Zn>(&b, curveType, P, mode, ecMode);
+	if (!b) throw cybozu::Exception("mcl:initCurve") << curveType << mode << ecMode;
+}
+#endif
 
 } // mcl
 
+#ifndef CYBOZU_DONT_USE_EXCEPTION
 #ifdef CYBOZU_USE_BOOST
 namespace mcl {
 template<class Fp>
@@ -1107,6 +1554,7 @@ struct hash<mcl::EcT<Fp> > {
 };
 
 CYBOZU_NAMESPACE_TR1_END } // std
+#endif
 #endif
 
 #ifdef _MSC_VER

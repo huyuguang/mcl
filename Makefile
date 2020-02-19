@@ -2,12 +2,13 @@ include common.mk
 LIB_DIR=lib
 OBJ_DIR=obj
 EXE_DIR=bin
-SRC_SRC=fp.cpp bn_c256.cpp bn_c384.cpp bn_c512.cpp she_c256.cpp
+SRC_SRC=fp.cpp bn_c256.cpp bn_c384.cpp bn_c384_256.cpp bn_c512.cpp she_c256.cpp
 TEST_SRC=fp_test.cpp ec_test.cpp fp_util_test.cpp window_method_test.cpp elgamal_test.cpp fp_tower_test.cpp gmp_test.cpp bn_test.cpp bn384_test.cpp glv_test.cpp paillier_test.cpp she_test.cpp vint_test.cpp bn512_test.cpp ecdsa_test.cpp conversion_test.cpp
 TEST_SRC+=bn_c256_test.cpp bn_c384_test.cpp bn_c384_256_test.cpp bn_c512_test.cpp
 TEST_SRC+=she_c256_test.cpp she_c384_test.cpp she_c384_256_test.cpp
 TEST_SRC+=aggregate_sig_test.cpp array_test.cpp
 TEST_SRC+=bls12_test.cpp
+TEST_SRC+=mapto_wb19_test.cpp
 TEST_SRC+=ecdsa_c_test.cpp
 TEST_SRC+=modp_test.cpp
 ifeq ($(CPU),x86-64)
@@ -27,6 +28,13 @@ ifneq ($(MCL_MAX_BIT_SIZE),)
 endif
 ifeq ($(MCL_USE_XBYAK),0)
   CFLAGS+=-DMCL_DONT_USE_XBYAK
+endif
+ifeq ($(MCL_USE_PROF),1)
+  CFLAGS+=-DMCL_USE_PROF
+endif
+ifeq ($(MCL_USE_PROF),2)
+  CFLAGS+=-DMCL_USE_PROF -DXBYAK_USE_VTUNE -I /opt/intel/vtune_amplifier/include/
+  LDFLAGS+=-L /opt/intel/vtune_amplifier/lib64 -ljitprofiling -ldl
 endif
 ##################################################################
 MCL_LIB=$(LIB_DIR)/libmcl.a
@@ -287,8 +295,8 @@ $(EXE_DIR)/bn_c384_256_test.exe: $(OBJ_DIR)/bn_c384_256_test.o $(BN384_256_LIB) 
 $(EXE_DIR)/bn_c512_test.exe: $(OBJ_DIR)/bn_c512_test.o $(BN512_LIB) $(MCL_LIB)
 	$(PRE)$(CXX) $< -o $@ $(BN512_LIB) $(MCL_LIB) $(LDFLAGS)
 
-$(EXE_DIR)/pairing_c.exe: $(OBJ_DIR)/pairing_c.o $(BN256_LIB) $(MCL_LIB)
-	$(PRE)$(CC) $< -o $@ $(BN256_LIB) $(MCL_LIB) $(LDFLAGS) -lstdc++
+$(EXE_DIR)/pairing_c.exe: $(OBJ_DIR)/pairing_c.o $(BN384_256_LIB) $(MCL_LIB)
+	$(PRE)$(CC) $< -o $@ $(BN384_256_LIB) $(MCL_LIB) $(LDFLAGS) -lstdc++
 
 $(EXE_DIR)/she_c256_test.exe: $(OBJ_DIR)/she_c256_test.o $(SHE256_LIB) $(MCL_LIB)
 	$(PRE)$(CXX) $< -o $@ $(SHE256_LIB) $(MCL_LIB) $(LDFLAGS)
@@ -313,7 +321,7 @@ sample: $(SAMPLE_EXE) $(MCL_LIB)
 
 TEST_EXE=$(addprefix $(EXE_DIR)/,$(TEST_SRC:.cpp=.exe))
 test_ci: $(TEST_EXE)
-	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=1:log_threads=1 $$i; done'
+	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=0:log_threads=1 $$i; done'
 test: $(TEST_EXE)
 	@echo test $(TEST_EXE)
 	@sh -ec 'for i in $(TEST_EXE); do $$i|grep "ctest:name"; done' > result.txt
@@ -360,7 +368,7 @@ ecdsa-wasm:
 bin/emu:
 	$(CXX) -g -o $@ src/fp.cpp src/bn_c256.cpp test/bn_c256_test.cpp -DMCL_DONT_USE_XBYAK -DMCL_DONT_USE_OPENSSL -DMCL_USE_VINT -DMCL_SIZEOF_UNIT=8 -DMCL_VINT_64BIT_PORTABLE -DMCL_VINT_FIXED_BUFFER -DMCL_MAX_BIT_SIZE=256 -I./include
 bin/pairing_c_min.exe: sample/pairing_c.c include/mcl/vint.hpp src/fp.cpp include/mcl/bn.hpp
-	$(CXX) -o $@ sample/pairing_c.c src/fp.cpp src/bn_c256.cpp -O3 -g -I./include -fno-threadsafe-statics -DMCL_DONT_USE_XBYAK -DMCL_DONT_USE_OPENSSL -DMCL_USE_VINT -DMCL_SIZEOF_UNIT=8 -DMCL_VINT_FIXED_BUFFER -DMCL_MAX_BIT_SIZE=256 -DMCL_VINT_64BIT_PORTABLE -DCYBOZU_DONT_USE_STRING -DCYBOZU_DONT_USE_EXCEPTION -DNDEBUG # -DMCL_DONT_USE_CSPRNG
+	$(CXX) -std=c++03 -O3 -g -fno-threadsafe-statics -fno-exceptions -fno-rtti -o $@ sample/pairing_c.c src/fp.cpp src/bn_c384_256.cpp -I./include -DMCL_DONT_USE_XBYAK -DMCL_DONT_USE_OPENSSL -DMCL_USE_VINT -DMCL_SIZEOF_UNIT=8 -DMCL_VINT_FIXED_BUFFER -DMCL_MAX_BIT_SIZE=384 -DMCL_VINT_64BIT_PORTABLE -DCYBOZU_DONT_USE_STRING -DCYBOZU_DONT_USE_EXCEPTION -DNDEBUG # -DMCL_DONT_USE_CSPRNG
 
 make_tbl:
 	$(MAKE) ../bls/src/qcoeff-bn254.hpp

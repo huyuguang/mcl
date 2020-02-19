@@ -42,7 +42,7 @@ ifeq ($(ARCH),x86)
   BIT_OPT=-m32
   #LOW_ASM_SRC=src/asm/low_x86.asm
 endif
-ifeq ($(ARCH),armv7l)
+ifneq ($(findstring $(ARCH),armv7l/armv6l),)
   CPU=arm
   BIT=32
   #LOW_ASM_SRC=src/asm/low_arm.s
@@ -95,7 +95,13 @@ CFLAGS+=$(CFLAGS_OPT_USER)
 endif
 CFLAGS+=$(CFLAGS_USER)
 MCL_USE_GMP?=1
-MCL_USE_OPENSSL?=1
+ifeq ($(OS),mac)
+  ifeq ($(shell sw_vers -productVersion),10.15)
+    # workaround because of GMP does not run well on Catalina
+    MCL_USE_GMP=0
+  endif
+endif
+MCL_USE_OPENSSL?=0
 ifeq ($(MCL_USE_GMP),0)
   CFLAGS+=-DMCL_USE_VINT
 endif

@@ -25,25 +25,28 @@ CYBOZU_TEST_AUTO(init)
 	CYBOZU_TEST_EQUAL(sizeof(mclBnG1), sizeof(G1));
 	CYBOZU_TEST_EQUAL(sizeof(mclBnG2), sizeof(G2));
 	CYBOZU_TEST_EQUAL(sizeof(mclBnGT), sizeof(Fp12));
+	int curveType;
 
 #if MCLBN_FP_UNIT_SIZE >= 4
 	printf("test BN254 %d\n", MCLBN_FP_UNIT_SIZE);
-	ret = mclBn_init(MCL_BN254, MCLBN_COMPILED_TIME_VAR);
+	curveType = MCL_BN254;
 #endif
 #if MCLBN_FP_UNIT_SIZE >= 6 && MCLBN_FR_UNIT_SIZE >= 4
 	printf("test BLS12_381 %d\n", MCLBN_FP_UNIT_SIZE);
-	ret = mclBn_init(MCL_BLS12_381, MCLBN_COMPILED_TIME_VAR);
+	curveType = MCL_BLS12_381;
 #endif
 #if MCLBN_FP_UNIT_SIZE >= 6 && MCLBN_FR_UNIT_SIZE >= 6
 	printf("test BN381_1 %d\n", MCLBN_FP_UNIT_SIZE);
-	ret = mclBn_init(MCL_BN381_1, MCLBN_COMPILED_TIME_VAR);
+	curveType = MCL_BN381_1;
 #endif
 #if MCLBN_FP_UNIT_SIZE == 8
 	printf("test BN462 %d\n", MCLBN_FP_UNIT_SIZE);
-	ret = mclBn_init(MCL_BN462, MCLBN_COMPILED_TIME_VAR);
+	curveType = MCL_BN462;
 #endif
+	ret = mclBn_init(curveType, MCLBN_COMPILED_TIME_VAR);
 	CYBOZU_TEST_EQUAL(ret, 0);
 	if (ret != 0) exit(1);
+	CYBOZU_TEST_EQUAL(curveType, mclBn_getCurveType());
 }
 
 CYBOZU_TEST_AUTO(Fr)
@@ -298,6 +301,81 @@ CYBOZU_TEST_AUTO(GT)
 	CYBOZU_TEST_ASSERT(mclBnGT_isEqual(&x, &y));
 }
 
+CYBOZU_TEST_AUTO(GT_inv)
+{
+	mclBnG1 P;
+	mclBnG2 Q;
+	mclBnGT e, e1, e2, e3, e4;
+	mclBnG1_hashAndMapTo(&P, "1", 1);
+	mclBnG2_hashAndMapTo(&Q, "1", 1);
+	// e is not in GT
+	mclBn_millerLoop(&e, &P, &Q);
+	mclBnGT_inv(&e1, &e); // e1 = a - b w if e = a + b w where Fp12 = Fp6[w]
+	mclBnGT_invGeneric(&e2, &e);
+	mclBnGT_mul(&e3, &e, &e1);
+	mclBnGT_mul(&e4, &e, &e2);
+	CYBOZU_TEST_ASSERT(!mclBnGT_isOne(&e3)); // GT_inv does not give a correct inverse for an element not in GT
+	CYBOZU_TEST_ASSERT(mclBnGT_isOne(&e4));
+
+	mclBn_finalExp(&e3, &e3); // e3 is in GT then e3 = 1
+	CYBOZU_TEST_ASSERT(mclBnGT_isOne(&e3));
+
+	// e is in GT
+	mclBn_finalExp(&e, &e);
+	mclBnGT_inv(&e1, &e);
+	mclBnGT_invGeneric(&e2, &e);
+	mclBnGT_mul(&e3, &e, &e1);
+	mclBnGT_mul(&e4, &e, &e2);
+	CYBOZU_TEST_ASSERT(mclBnGT_isOne(&e3)); // GT_inv gives a correct inverse for an element in GT
+	CYBOZU_TEST_ASSERT(mclBnGT_isOne(&e4));
+}
+
+CYBOZU_TEST_AUTO(Fr_isNegative)
+{
+	mclBnFr a, half, one;
+	mclBnFr_setInt(&half, 2);
+	mclBnFr_inv(&half, &half); // half = (r + 1) / 2
+	mclBnFr_setInt(&one, 1);
+	mclBnFr_sub(&a, &half, &one);
+	CYBOZU_TEST_ASSERT(!mclBnFr_isNegative(&a));
+	mclBnFr_add(&a, &a, &one);
+	CYBOZU_TEST_ASSERT(mclBnFr_isNegative(&a));
+}
+
+CYBOZU_TEST_AUTO(Fp_isNegative)
+{
+	mclBnFp a, half, one;
+	mclBnFp_setInt(&half, 2);
+	mclBnFp_inv(&half, &half); // half = (p + 1) / 2
+	mclBnFp_setInt(&one, 1);
+	mclBnFp_sub(&a, &half, &one);
+	CYBOZU_TEST_ASSERT(!mclBnFp_isNegative(&a));
+	mclBnFp_add(&a, &a, &one);
+	CYBOZU_TEST_ASSERT(mclBnFp_isNegative(&a));
+}
+
+CYBOZU_TEST_AUTO(Fr_isOdd)
+{
+	mclBnFr x, one;
+	mclBnFr_clear(&x);
+	mclBnFr_setInt(&one, 1);
+	for (size_t i = 0; i < 100; i++) {
+		CYBOZU_TEST_EQUAL(mclBnFr_isOdd(&x), i & 1);
+		mclBnFr_add(&x, &x, &one);
+	}
+}
+
+CYBOZU_TEST_AUTO(Fp_isOdd)
+{
+	mclBnFp x, one;
+	mclBnFp_clear(&x);
+	mclBnFp_setInt(&one, 1);
+	for (size_t i = 0; i < 100; i++) {
+		CYBOZU_TEST_EQUAL(mclBnFp_isOdd(&x), i & 1);
+		mclBnFp_add(&x, &x, &one);
+	}
+}
+
 CYBOZU_TEST_AUTO(pairing)
 {
 	mclBnFr a, b, ab;
@@ -365,6 +443,26 @@ CYBOZU_TEST_AUTO(precomputed)
 
 	mclBnGT_mul(&e1, &e1, &e2);
 	CYBOZU_TEST_ASSERT(mclBnGT_isEqual(&e1, &f3));
+}
+
+CYBOZU_TEST_AUTO(millerLoopVec)
+{
+	const size_t n = 7;
+	mclBnG1 Pvec[n];
+	mclBnG2 Qvec[n];
+	for (size_t i = 0; i < n; i++) {
+		char d = (char)(i + 1);
+		mclBnG1_hashAndMapTo(&Pvec[i], &d, 1);
+		mclBnG2_hashAndMapTo(&Qvec[i], &d, 1);
+	}
+	mclBnGT e1, e2;
+	mclBnGT_setInt(&e2, 1);
+	for (size_t i = 0; i < n; i++) {
+		mclBn_millerLoop(&e1, &Pvec[i], &Qvec[i]);
+		mclBnGT_mul(&e2, &e2, &e1);
+	}
+	mclBn_millerLoopVec(&e1, Pvec, Qvec, n);
+	CYBOZU_TEST_ASSERT(mclBnGT_isEqual(&e1, &e2));
 }
 
 CYBOZU_TEST_AUTO(serialize)
@@ -517,6 +615,129 @@ CYBOZU_TEST_AUTO(serializeToHexStr)
 	CYBOZU_TEST_EQUAL(n, expectSize);
 }
 
+CYBOZU_TEST_AUTO(ETHserialization)
+{
+	int curveType = mclBn_getCurveType();
+	if (curveType != MCL_BLS12_381) return;
+	int keepETH = mclBn_getETHserialization();
+	char buf[128] = {};
+	char str[128];
+	buf[0] = 0x12;
+	buf[1] = 0x34;
+	size_t n;
+	mclBnFr x;
+	mclBn_setETHserialization(false);
+	n = mclBnFr_deserialize(&x, buf, 32);
+	CYBOZU_TEST_EQUAL(n, 32);
+	n = mclBnFr_getStr(str, sizeof(str), &x, 16);
+	CYBOZU_TEST_ASSERT(n > 0);
+	CYBOZU_TEST_EQUAL(strcmp(str, "3412"), 0);
+
+	mclBn_setETHserialization(true);
+	n = mclBnFr_deserialize(&x, buf, 32);
+	CYBOZU_TEST_EQUAL(n, 32);
+	n = mclBnFr_getStr(str, sizeof(str), &x, 16);
+	CYBOZU_TEST_ASSERT(n > 0);
+	CYBOZU_TEST_EQUAL(strcmp(str, "1234000000000000000000000000000000000000000000000000000000000000"), 0);
+
+	mclBnFp y;
+	mclBn_setETHserialization(false);
+	n = mclBnFp_deserialize(&y, buf, 48);
+	CYBOZU_TEST_EQUAL(n, 48);
+	n = mclBnFp_getStr(str, sizeof(str), &y, 16);
+	CYBOZU_TEST_ASSERT(n > 0);
+	CYBOZU_TEST_EQUAL(strcmp(str, "3412"), 0);
+
+	mclBn_setETHserialization(true);
+	n = mclBnFp_deserialize(&y, buf, 48);
+	CYBOZU_TEST_EQUAL(n, 48);
+	n = mclBnFp_getStr(str, sizeof(str), &y, 16);
+	CYBOZU_TEST_ASSERT(n > 0);
+	CYBOZU_TEST_EQUAL(strcmp(str, "123400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"), 0);
+
+	mclBn_setETHserialization(keepETH);
+}
+
+struct Fp2Str {
+	const char *a;
+	const char *b;
+};
+
+void setFp2(mclBnFp2 *x, const Fp2Str& s)
+{
+	CYBOZU_TEST_EQUAL(mclBnFp_setStr(&x->d[0], s.a, strlen(s.a), 16), 0);
+	CYBOZU_TEST_EQUAL(mclBnFp_setStr(&x->d[1], s.b, strlen(s.b), 16), 0);
+}
+
+CYBOZU_TEST_AUTO(eth_hash)
+{
+	int curveType = mclBn_getCurveType();
+	if (curveType != MCL_BLS12_381) return;
+	{
+		const char *msg = "msg";
+		uint8_t ctr = 0;
+		const char *dst = "BLS_SIG_BLS12381G2-SHA256-SSWU-RO_POP_";
+		const Fp2Str ys = {
+			"18df4dc51885b18ca0082a4966b0def46287930b8f1c0b673b11ac48d19c8899bc150d83fd3a7a1430b0de541742c1d4",
+			"14eef8ca34b82d065d187a3904cb313dbb44558917cc5091574d9999b5ecfdd5af2fa3aea6e02fb253bf4ae670e72d55"
+		};
+		mclBnFp2 x, y;
+		CYBOZU_TEST_EQUAL(mclBn_ethMsgToFp2(&x, msg, strlen(msg), ctr, dst, strlen(dst)), 0);
+		setFp2(&y, ys);
+		CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&x, &y));
+	}
+	{
+		const Fp2Str u0s = {
+			"0x004ad233c619209060e40059b81e4c1f92796b05aa1bc6358d65e53dc0d657dfbc713d4030b0b6d9234a6634fd1944e7",
+			"0x0e2386c82713441bc3b06a460bd81850f4bf376ea89c80b18c0881e855c58dc8e83b2fd23af983f4786508e30c42af01",
+		};
+		const Fp2Str u1s = {
+			"0x08a6a75e0a8d32f1e096f29047ea879dd34a5504218d7ce92c32c244786822fb73fbf708d167ad86537468249ec6df48",
+			"0x07016d0e5e13cd65780042c6f7b4c74ae1c58da438c99582696818b5c229895b893318dcb87d2a65e557d4ebeb408b70",
+		};
+		const Fp2Str xs = {
+			"0x4861c41efcc5fc56e62273692b48da25d950d2a0aaffb34eff80e8dbdc2d41ca38555ceb8554368436aea47d16056b5",
+			"0x9db5217528c55d982cf05fc54242bdcd25f1ebb73372e00e16d8e0f19dc3aeabdeef2d42d693405a04c37d60961526a",
+		};
+		const Fp2Str ys = {
+			"0x177d05b95e7879a7ddbd83c15114b5a4e9846fde72b2263072dc9e60db548ccbadaacb92cc4952d4f47425fe3c5e0172",
+			"0xfc82c99b928ed9df12a74f9215c3df8ae1e9a3fa54c00897889296890b23a0edcbb9653f9170bf715f882b35c0b4647",
+		};
+		mclBnFp2 u0, u1, x, y;
+		setFp2(&u0, u0s);
+		setFp2(&u1, u1s);
+		setFp2(&x, xs);
+		setFp2(&y, ys);
+		mclBnG2 P;
+		mclBn_ethFp2ToG2(&P, &u0, &u1);
+		mclBnG2_normalize(&P, &P);
+		CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&P.x, &x));
+		CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&P.y, &y));
+	}
+	{
+		const char *msg = "msg";
+		const char *dst = "BLS_SIG_BLS12381G2-SHA256-SSWU-RO_POP_";
+		const Fp2Str xs = {
+			"0xb1871d245d50ec4e5a3ac790628864d24655208812abc420b67a93c5afdd38111137f14ca0f844ddbf69809897ca941",
+			"0xa8b490ae1aac870b16b1a82db2e9653ec14485fc5f38c2ce2926c526537262061d4cd8bc62cc90e98235952a7fe7f13",
+		};
+		const Fp2Str ys = {
+			"0x2c8e9f9d52870075ae5879be5a4994a16db6c93b34453d9c055eb058107a2d805cc307b0ba30144518fb36da5f97d12",
+			"0x344ce62d77dda0b4b509d5b5e6ef08f99c972fc0e5f0c25b25bb881384e85b8b1086043813e674f9bbc4b67dd47d9a7",
+		};
+		const Fp2Str zs = {
+			"0x1515a4d612e48626000f998a220029380a47e9e6c69d497db804e2dfc3dbce5cfb000a559b64f50796f26ddc4cf3be2c",
+			"0x1796ee0f0b9b65802c90e3e1586034f3826ec3538c66525de298d1ff2f7a26f2ec553ec64e5989ed9841c4456d0bddd7",
+		};
+		mclBnG2 P, Q;
+		mclBn_ethMsgToG2(&P, msg, strlen(msg), dst, strlen(dst));
+		setFp2(&Q.x, xs);
+		setFp2(&Q.y, ys);
+		setFp2(&Q.z, zs);
+		CYBOZU_TEST_ASSERT(mclBnG2_isEqual(&P, &Q));
+	}
+}
+
 #if MCLBN_FP_UNIT_SIZE == 6 && MCLBN_FR_UNIT_SIZE >= 6
 CYBOZU_TEST_AUTO(badG2)
 {
@@ -556,8 +777,8 @@ CYBOZU_TEST_AUTO(setRandFunc)
 			char buf[1024];
 			ret = mclBnFr_setByCSPRNG(&x);
 			CYBOZU_TEST_EQUAL(ret, 0);
-			ret = mclBnFr_getStr(buf, sizeof(buf), &x, 16);
-			CYBOZU_TEST_ASSERT(ret > 0);
+			size_t n = mclBnFr_getStr(buf, sizeof(buf), &x, 16);
+			CYBOZU_TEST_ASSERT(n > 0);
 			printf("%d %s\n", i, buf);
 		}
 		if (j == 0) {
@@ -565,6 +786,94 @@ CYBOZU_TEST_AUTO(setRandFunc)
 		} else {
 			mclBn_setRandFunc(0, 0);
 		}
+	}
+}
+
+CYBOZU_TEST_AUTO(Fp_1)
+{
+	mclBnFp x, y;
+	memset(&x, 0xff, sizeof(x));
+	CYBOZU_TEST_ASSERT(!mclBnFp_isValid(&x));
+	CYBOZU_TEST_ASSERT(!mclBnFp_isZero(&x));
+
+	mclBnFp_clear(&x);
+	CYBOZU_TEST_ASSERT(mclBnFp_isZero(&x));
+
+	mclBnFp_setInt(&x, 1);
+	CYBOZU_TEST_ASSERT(mclBnFp_isOne(&x));
+
+	mclBnFp_setInt(&y, -1);
+	CYBOZU_TEST_ASSERT(!mclBnFp_isEqual(&x, &y));
+
+	y = x;
+	CYBOZU_TEST_ASSERT(mclBnFp_isEqual(&x, &y));
+
+	mclBnFp_setHashOf(&x, "", 0);
+	mclBnFp_setHashOf(&y, "abc", 3);
+	CYBOZU_TEST_ASSERT(!mclBnFp_isEqual(&x, &y));
+	mclBnFp_setHashOf(&x, "abc", 3);
+	CYBOZU_TEST_ASSERT(mclBnFp_isEqual(&x, &y));
+
+	char buf[1024];
+	mclBnFp_setInt(&x, 12345678);
+	size_t size;
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_EQUAL(size, 8);
+	CYBOZU_TEST_EQUAL(buf, "12345678");
+
+	mclBnFp_setInt(&x, -7654321);
+	mclBnFp_neg(&x, &x);
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_EQUAL(size, 7);
+	CYBOZU_TEST_EQUAL(buf, "7654321");
+
+	mclBnFp_setInt(&y, 123 - 7654321);
+	mclBnFp_add(&x, &x, &y);
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_EQUAL(size, 3);
+	CYBOZU_TEST_EQUAL(buf, "123");
+
+	mclBnFp_setInt(&y, 100);
+	mclBnFp_sub(&x, &x, &y);
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_EQUAL(size, 2);
+	CYBOZU_TEST_EQUAL(buf, "23");
+
+	mclBnFp_mul(&x, &x, &y);
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_EQUAL(size, 4);
+	CYBOZU_TEST_EQUAL(buf, "2300");
+
+	mclBnFp_div(&x, &x, &y);
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_EQUAL(size, 2);
+	CYBOZU_TEST_EQUAL(buf, "23");
+
+	mclBnFp_mul(&x, &y, &y);
+	mclBnFp_sqr(&y, &y);
+	CYBOZU_TEST_ASSERT(mclBnFp_isEqual(&x, &y));
+
+	const char *s = "12345678901234567";
+	CYBOZU_TEST_ASSERT(!mclBnFp_setStr(&x, s, strlen(s), 10));
+	s = "20000000000000000";
+	CYBOZU_TEST_ASSERT(!mclBnFp_setStr(&y, s, strlen(s), 10));
+	mclBnFp_add(&x, &x, &y);
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_EQUAL(size, 17);
+	CYBOZU_TEST_EQUAL(buf, "32345678901234567");
+
+	mclBnFp_setInt(&x, 1);
+	mclBnFp_neg(&x, &x);
+	size = mclBnFp_getStr(buf, sizeof(buf), &x, 10);
+	CYBOZU_TEST_ASSERT(size > 0);
+	CYBOZU_TEST_EQUAL(size, strlen(buf));
+	CYBOZU_TEST_ASSERT(!mclBnFp_setStr(&y, buf, size, 10));
+	CYBOZU_TEST_ASSERT(mclBnFp_isEqual(&x, &y));
+
+	for (int i = 0; i < 10; i++) {
+		mclBnFp_setByCSPRNG(&x);
+		mclBnFp_getStr(buf, sizeof(buf), &x, 16);
+		printf("%s\n", buf);
 	}
 }
 
@@ -593,6 +902,17 @@ CYBOZU_TEST_AUTO(Fp)
 	mclBnFp_clear(&x1);
 	memset(&x2, 0, sizeof(x2));
 	CYBOZU_TEST_ASSERT(mclBnFp_isEqual(&x1, &x2));
+
+	mclBnFp_clear(&x1);
+	CYBOZU_TEST_ASSERT(mclBnFp_isZero(&x1));
+
+	mclBnFp_setInt(&x1, 1);
+	CYBOZU_TEST_ASSERT(mclBnFp_isOne(&x1));
+
+	mclBnFp_setInt(&x1, -1);
+	CYBOZU_TEST_ASSERT(!mclBnFp_isOne(&x1));
+    mclBnFp_neg(&x1, &x1);
+	CYBOZU_TEST_ASSERT(mclBnFp_isOne(&x1));
 }
 
 CYBOZU_TEST_AUTO(mod)
@@ -636,9 +956,101 @@ CYBOZU_TEST_AUTO(Fp2)
 	n = mclBnFp2_deserialize(&x2, buf, n);
 	CYBOZU_TEST_ASSERT(n > 0);
 	CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&x1, &x2));
+
+	mclBnFp2 y, z;
+	mclBnFp2_add(&y, &x1, &x2);
+	for (int i = 0; i < 2; i++) {
+		mclBnFp t;
+		mclBnFp_add(&t, &x1.d[i], &x2.d[i]);
+		CYBOZU_TEST_ASSERT(mclBnFp_isEqual(&y.d[i], &t));
+	}
+	mclBnFp2_sub(&y, &y, &x2);
+	CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&y, &x1));
+	mclBnFp2_mul(&y, &x1, &x2);
+	mclBnFp2_div(&y, &y, &x1);
+	CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&y, &x2));
+	mclBnFp2_inv(&y, &x1);
+	mclBnFp2_mul(&y, &y, &x1);
+	CYBOZU_TEST_ASSERT(mclBnFp2_isOne(&y));
+	mclBnFp2_sqr(&y, &x1);
+	mclBnFp2_mul(&z, &x1, &x1);
+	CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&y, &z));
+	mclBnFp2_sub(&y, &x1, &x2);
+	mclBnFp2_sub(&z, &x2, &x1);
+	mclBnFp2_neg(&z, &z);
+	CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&y, &z));
+
 	mclBnFp2_clear(&x1);
 	memset(&x2, 0, sizeof(x2));
 	CYBOZU_TEST_ASSERT(mclBnFp2_isEqual(&x1, &x2));
+	CYBOZU_TEST_ASSERT(mclBnFp2_isZero(&x1));
+}
+
+CYBOZU_TEST_AUTO(squareRootFr)
+{
+	mclBnFr x, y, y2;
+	for (int i = 0; i < 10; i++) {
+		mclBnFr_setInt(&x, i * i);
+		CYBOZU_TEST_EQUAL(mclBnFr_squareRoot(&y, &x), 0);
+		mclBnFr_sqr(&y2, &y);
+		CYBOZU_TEST_EQUAL(mclBnFr_isEqual(&x, &y2), 1);
+	}
+	char buf[128];
+	mclBnFr_setInt(&x, -1);
+	CYBOZU_TEST_ASSERT(mclBnFr_serialize(buf, sizeof(buf), &x) > 0);
+	int mod8 = (buf[0] + 1) & 7;
+	/*
+		(2)
+		(p) = (-1)^((p^2-1)/8) = 1 if and only if there is x s.t. x^2 = 2 mod p
+	*/
+	bool hasSquareRoot = (((mod8 * mod8 - 1) / 8) & 1) == 0;
+	printf("Fr:hasSquareRoot=%d\n", hasSquareRoot);
+	mclBnFr_setInt(&x, 2);
+	CYBOZU_TEST_EQUAL(mclBnFr_squareRoot(&y, &x), hasSquareRoot ? 0 : -1);
+	if (hasSquareRoot) {
+		mclBnFr_sqr(&y2, &y);
+		CYBOZU_TEST_EQUAL(mclBnFr_isEqual(&x, &y2), 1);
+	}
+}
+
+CYBOZU_TEST_AUTO(squareRootFp)
+{
+	mclBnFp x, y, y2;
+	for (int i = 0; i < 10; i++) {
+		mclBnFp_setInt(&x, i * i);
+		CYBOZU_TEST_EQUAL(mclBnFp_squareRoot(&y, &x), 0);
+		mclBnFp_sqr(&y2, &y);
+		CYBOZU_TEST_EQUAL(mclBnFp_isEqual(&x, &y2), 1);
+	}
+	char buf[128];
+	mclBnFp_setInt(&x, -1);
+	CYBOZU_TEST_ASSERT(mclBnFp_serialize(buf, sizeof(buf), &x) > 0);
+	int mod8 = (buf[0] + 1) & 7;
+	/*
+		(2)
+		(p) = (-1)^((p^2-1)/8) = 1 if and only if there is x s.t. x^2 = 2 mod p
+	*/
+	bool hasSquareRoot = (((mod8 * mod8 - 1) / 8) & 1) == 0;
+	printf("Fp:hasSquareRoot=%d\n", hasSquareRoot);
+	mclBnFp_setInt(&x, 2);
+	CYBOZU_TEST_EQUAL(mclBnFp_squareRoot(&y, &x), hasSquareRoot ? 0 : -1);
+	if (hasSquareRoot) {
+		mclBnFp_sqr(&y2, &y);
+		CYBOZU_TEST_EQUAL(mclBnFp_isEqual(&x, &y2), 1);
+	}
+}
+
+CYBOZU_TEST_AUTO(squareRootFp2)
+{
+	mclBnFp2 x, y, y2;
+	for (int i = 0; i < 10; i++) {
+		mclBnFp_setByCSPRNG(&x.d[0]);
+		mclBnFp_setByCSPRNG(&x.d[1]);
+		mclBnFp2_sqr(&x, &x);
+		CYBOZU_TEST_EQUAL(mclBnFp2_squareRoot(&y, &x), 0);
+		mclBnFp2_sqr(&y2, &y);
+		CYBOZU_TEST_EQUAL(mclBnFp2_isEqual(&x, &y2), 1);
+	}
 }
 
 CYBOZU_TEST_AUTO(mapToG1)
@@ -664,6 +1076,75 @@ CYBOZU_TEST_AUTO(mapToG2)
 	CYBOZU_TEST_ASSERT(mclBnG2_isEqual(&P1, &P2));
 }
 
+CYBOZU_TEST_AUTO(getLittleEndian)
+{
+	const struct {
+		const char *in;
+		uint8_t out[16];
+		size_t size;
+	} tbl[] = {
+		{ "0", { 0 }, 1 },
+		{ "1", { 1 }, 1 },
+		{ "0x1200", { 0x00, 0x12 }, 2 },
+		{ "0x123400", { 0x00, 0x34, 0x12 }, 3 },
+		{ "0x1234567890123456ab", { 0xab, 0x56, 0x34, 0x12, 0x90, 0x78, 0x56, 0x34, 0x12 }, 9 },
+	};
+	for (size_t i = 0; i < CYBOZU_NUM_OF_ARRAY(tbl); i++) {
+		size_t n;
+		mclBnFr x;
+		CYBOZU_TEST_ASSERT(!mclBnFr_setStr(&x, tbl[i].in, strlen(tbl[i].in), 0));
+		uint8_t buf[128];
+		n = mclBnFr_getLittleEndian(buf, tbl[i].size, &x);
+		CYBOZU_TEST_EQUAL(n, tbl[i].size);
+		CYBOZU_TEST_EQUAL_ARRAY(buf, tbl[i].out, n);
+
+		n = mclBnFr_getLittleEndian(buf, tbl[i].size + 1, &x);
+		CYBOZU_TEST_EQUAL(n, tbl[i].size);
+		CYBOZU_TEST_EQUAL_ARRAY(buf, tbl[i].out, n);
+
+		n = mclBnFr_getLittleEndian(buf, tbl[i].size - 1, &x);
+		CYBOZU_TEST_EQUAL(n, 0);
+	}
+}
+
+CYBOZU_TEST_AUTO(mulVec)
+{
+	const size_t N = 70;
+	mclBnG1 x1Vec[N], z1, w1;
+	mclBnG2 x2Vec[N], z2, w2;
+	mclBnGT xtVec[N], zt, wt;
+	mclBnFr yVec[N];
+
+	for (size_t i = 0; i < N; i++) {
+		char c = char('a' + i);
+		mclBnG1_hashAndMapTo(&x1Vec[i], &c, 1);
+		mclBnG2_hashAndMapTo(&x2Vec[i], &c, 1);
+		mclBn_pairing(&xtVec[i], &x1Vec[i], &x2Vec[i]);
+		mclBnFr_setByCSPRNG(&yVec[i]);
+	}
+	mclBnG1_mulVec(&z1, x1Vec, yVec, N);
+	mclBnG2_mulVec(&z2, x2Vec, yVec, N);
+	mclBnGT_powVec(&zt, xtVec, yVec, N);
+
+	mclBnG1_clear(&w1);
+	mclBnG2_clear(&w2);
+	mclBnGT_setInt(&wt, 1);
+	for (size_t i = 0; i < N; i++) {
+		mclBnG1 t1;
+		mclBnG2 t2;
+		mclBnGT tt;
+		mclBnG1_mul(&t1, &x1Vec[i], &yVec[i]);
+		mclBnG2_mul(&t2, &x2Vec[i], &yVec[i]);
+		mclBnGT_pow(&tt, &xtVec[i], &yVec[i]);
+		mclBnG1_add(&w1, &w1, &t1);
+		mclBnG2_add(&w2, &w2, &t2);
+		mclBnGT_mul(&wt, &wt, &tt);
+	}
+	CYBOZU_TEST_ASSERT(mclBnG1_isEqual(&z1, &w1));
+	CYBOZU_TEST_ASSERT(mclBnG2_isEqual(&z2, &w2));
+	CYBOZU_TEST_ASSERT(mclBnGT_isEqual(&zt, &wt));
+}
+
 void G1onlyTest(int curve)
 {
 	printf("curve=%d\n", curve);
@@ -674,8 +1155,8 @@ void G1onlyTest(int curve)
 	ret = mclBnG1_getBasePoint(&P0);
 	CYBOZU_TEST_EQUAL(ret, 0);
 	char buf[256];
-	ret = mclBnG1_getStr(buf, sizeof(buf), &P0, 16);
-	CYBOZU_TEST_ASSERT(ret > 0);
+	size_t n = mclBnG1_getStr(buf, sizeof(buf), &P0, 16);
+	CYBOZU_TEST_ASSERT(n > 0);
 	printf("basePoint=%s\n", buf);
 	G1test();
 }

@@ -5,6 +5,8 @@
 #include <mcl/conversion.hpp>
 #ifdef MCL_USE_XBYAK
 #include "fp_generator.hpp"
+#else
+#include "detect_cpu.hpp"
 #endif
 #include "low_func.hpp"
 #ifdef MCL_USE_LLVM
@@ -124,6 +126,37 @@ uint32_t sha256(void *out, uint32_t maxOutSize, const void *msg, uint32_t msgSiz
 uint32_t sha512(void *out, uint32_t maxOutSize, const void *msg, uint32_t msgSize)
 {
 	return (uint32_t)cybozu::Sha512().digest(out, maxOutSize, msg, msgSize);
+}
+
+void hkdf_extract_addZeroByte(uint8_t hmac[32], const uint8_t *salt, size_t saltSize, const uint8_t *msg, size_t msgSize)
+{
+	uint8_t saltZero[32];
+	if (salt == 0 || saltSize == 0) {
+		memset(saltZero, 0, sizeof(saltZero));
+		salt = saltZero;
+		saltSize = sizeof(saltZero);
+	}
+	cybozu::hmac256addZeroByte(hmac, salt, saltSize, msg, msgSize);
+}
+
+void hkdf_extract(uint8_t hmac[32], const uint8_t *salt, size_t saltSize, const uint8_t *msg, size_t msgSize)
+{
+	uint8_t saltZero[32];
+	if (salt == 0 || saltSize == 0) {
+		memset(saltZero, 0, sizeof(saltZero));
+		salt = saltZero;
+		saltSize = sizeof(saltZero);
+	}
+	cybozu::hmac256(hmac, salt, saltSize, msg, msgSize);
+}
+
+void hkdf_expand(uint8_t out[64], const uint8_t prk[32], char info[6])
+{
+	info[5] = 1;
+	cybozu::hmac256(out, prk, 32, info, 6);
+	info[5] = 2;
+	memcpy(out + 32, info, 6);
+	cybozu::hmac256(out + 32, prk, 32, out, 32 + 6);
 }
 
 #ifndef MCL_USE_VINT
@@ -253,13 +286,18 @@ void setOp(Op& op, Mode mode)
 	if (mode != fp::FP_GMP && mode != fp::FP_GMP_MONT) {
 #if MCL_LLVM_BMI2 == 1
 		const bool gmpIsFasterThanLLVM = false;//(N == 8 && MCL_SIZEOF_UNIT == 8);
-		Xbyak::util::Cpu cpu;
-		if (cpu.has(Xbyak::util::Cpu::tBMI2)) {
-			setOp2<N, LBMI2tag, (N * UnitBitSize <= 256), gmpIsFasterThanLLVM>(op);
+#ifdef MCL_USE_XBYAK
+		using namespace Xbyak;
+#else
+		using namespace mcl;
+#endif
+		util::Cpu cpu;
+		if (cpu.has(util::Cpu::tBMI2)) {
+			setOp2<N, LBMI2tag, (N * UnitBitSize <= 384), gmpIsFasterThanLLVM>(op);
 		} else
 #endif
 		{
-			setOp2<N, Ltag, (N * UnitBitSize <= 256), false>(op);
+			setOp2<N, Ltag, (N * UnitBitSize <= 384), false>(op);
 		}
 	}
 #else
@@ -387,25 +425,24 @@ bool Op::init(const mpz_class& _p, size_t maxBitSize, int _xi_a, Mode mode, size
 
 #if defined(MCL_USE_LLVM) || defined(MCL_USE_XBYAK)
 	if (mode == FP_AUTO || mode == FP_LLVM || mode == FP_XBYAK) {
-		const char *pStr = "0xfffffffffffffffffffffffffffffffeffffffffffffffff";
-		bool b;
-		mpz_class p192;
-		gmp::setStr(&b, p192, pStr);
-		if (b && mp == p192) {
-			primeMode = PM_NIST_P192;
-			isMont = false;
-			isFastMod = true;
-		}
-	}
-	if (mode == FP_AUTO || mode == FP_LLVM || mode == FP_XBYAK) {
-		const char *pStr = "0x1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-		bool b;
-		mpz_class p521;
-		gmp::setStr(&b, p521, pStr);
-		if (b && mp == p521) {
-			primeMode = PM_NIST_P521;
-			isMont = false;
-			isFastMod = true;
+		const struct {
+			PrimeMode mode;
+			const char *str;
+		} tbl[] = {
+			{ PM_NIST_P192, "0xfffffffffffffffffffffffffffffffeffffffffffffffff" },
+			{ PM_NIST_P521, "0x1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+		};
+		// use fastMode for special primes
+		for (size_t i = 0; i < CYBOZU_NUM_OF_ARRAY(tbl); i++) {
+			bool b;
+			mpz_class target;
+			gmp::setStr(&b, target, tbl[i].str);
+			if (b && mp == target) {
+				primeMode = tbl[i].mode;
+				isMont = false;
+				isFastMod = true;
+				break;
+			}
 		}
 	}
 #endif
